@@ -2,15 +2,7 @@
 solvent-accessible surface area data encoded within a 
 binary array, for visualisation within IQMol. */
 
-#include <iostream>
 #include <fstream>
-#include <string>
-#include <sstream>
-#include <vector>
-#include <iomanip>
-#include <math.h>
-#include <cmath>
-#include <stdio.h>
 #include "boost/multi_array.hpp"
 #include <QVector>
 #include <QString>
@@ -289,7 +281,7 @@ QVector<Atom> parseXYZ( const string& infile ) {
 
 int main( ) 
 {
-	int quality = 5;
+	int quality = 1;
 	QVector<Atom> atomVector = parseXYZ("methanol.xyz");
 	QVector<double> bbmin = get_bbmin(atomVector);
 	QVector<double> bbmax = get_bbmax(atomVector);
