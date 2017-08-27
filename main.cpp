@@ -1,6 +1,6 @@
 /* Parse an input .xyz file and return a .cube file containing
 solvent-excluded surface area data encoded within a 
-binary grid, for visualisation within IQMol. */
+binary array, for visualisation within IQMol. */
 
 #include <fstream>
 #include <iostream>
@@ -13,18 +13,21 @@ binary grid, for visualisation within IQMol. */
 #include <QElapsedTimer>
 #include <QTextStream>
 
-//#include "QGLViewer/vec.h"
+//#include <openbabel>
+#include "QGLViewer/vec.h"
 
 using namespace std;
 
 typedef boost::multi_array<double, 3> Array3D;
-typedef std::tuple<unsigned, unsigned, unsigned> GridPoint;
+typedef std::tuple<unsigned, unsigned, unsigned> GridPoint; // A way of storing admissible gridpoints
 
 double const BohrRadius          = 5.2917721092e-11;
 double const BohrToAngstrom      = BohrRadius*1.0e10;
 double const AngstromToBohr      = 1.0/BohrToAngstrom;
 
-// Need to work on integrating information about atomtypes
+//Vec grad;
+
+// An atom contains an atomType, a set of coords and an index.
 class Atom {
 	private:
 		unsigned m_index;
@@ -39,11 +42,11 @@ class Atom {
 
 		Atom() : m_index(), m_atomtype(), m_xcoord(), m_ycoord(), m_zcoord() {}
 
-		string getAtomType() {return m_atomtype;}
-		int getAtomIndex() {return m_index;}
-		float getX() {return m_xcoord;}
-		float getY() {return m_ycoord;}
-		float getZ() {return m_zcoord;}
+		string getAtomType() const {return m_atomtype;}
+		int getAtomIndex() const {return m_index;}
+		float getX() const {return m_xcoord;}
+		float getY() const {return m_ycoord;}
+		float getZ() const {return m_zcoord;}
 
 		bool operator==(const Atom &other) const
 		{
@@ -310,10 +313,9 @@ class Solvent {
 		Solvent(string solvent_name, double radius) : m_solvent_name(solvent_name), m_radius(radius) {}
 
 		string getSolventName() {return m_solvent_name;}
-		double getSolventRadius() {return m_radius;}
+		double const& getSolventRadius() const {return m_radius;}
 };
 
-// Could work on improving speed
 QVector<double> getBBMax(QVector<Atom> atomVector, Solvent solvent_instance) {
 	
 	float maxX = 0;
@@ -331,6 +333,7 @@ QVector<double> getBBMax(QVector<Atom> atomVector, Solvent solvent_instance) {
 		if(atomVector[iatom].getZ() > maxZ) {maxZ = atomVector[iatom].getZ();}
 	}
 	
+	//maxX += (maxVDW + solvent_radius + 15*stepSize(quality)); // largest VDW radius in input + some data points
 	maxX += (maxVDW + solvent_radius); // largest VDW radius in input + some data points
 	maxY += (maxVDW + solvent_radius); // fudge factor
 	maxZ += (maxVDW + solvent_radius); // fudge factor
@@ -340,7 +343,6 @@ QVector<double> getBBMax(QVector<Atom> atomVector, Solvent solvent_instance) {
 	return bbmax;
 }; 
 
-// Could work on improving speed
 QVector<double> getBBMin(QVector<Atom> atomVector, Solvent solvent_instance) {
 
 	float minX = 0;
@@ -367,24 +369,24 @@ QVector<double> getBBMin(QVector<Atom> atomVector, Solvent solvent_instance) {
 	return bbmin;
 };
 
-// Can make these refer to memory allocations rather than instances
 float DistanceBetween3DPoints(float x1, float x2, float y1, float y2, float z1, float z2) {
-	float distance = sqrt( pow((x1-x2),2) + pow((y1-y2),2) + pow((z1-z2),2) );
+
+	float distance = sqrt( (x1-x2)*(x1-x2) + (y1-y2)*(y1-y2) + (z1-z2)*(z1-z2) );
 	return distance;
 }
 
 QVector<Atom> parseXYZ( const string& infile ) {
+	ifstream input_file(infile.c_str(), std::ifstream::in);
+	if(!input_file.good()) {throw "The file does not exist! ";}
+
 	unsigned natoms;
 	int atomIndex = 1;
 	float xcoord, ycoord, zcoord;
 	string atomtype; 
 	QVector<Atom> atomVector;
 
-	ifstream input_file(infile.c_str(), std::ifstream::in);
-	if(!input_file.good()) {throw "The file does not exist! ";}
-
 	input_file >> natoms;
-	for(unsigned iatom=0; iatom<natoms; iatom++) {
+	for(unsigned iatom = 0; iatom < natoms; iatom++) {
 		input_file >> atomtype >> xcoord >> ycoord >> zcoord;
 		atomVector.append(Atom(atomIndex, atomtype, xcoord, ycoord, zcoord));
 		atomIndex += 1;
@@ -398,18 +400,18 @@ GridData doVDWTest(GridSize mygridsize, QVector<Atom> atomVector, GridData mygri
 	for (unsigned i=0; i<mygridsize.nx(); i++) {
 		for (unsigned j=0; j<mygridsize.ny(); j++) {
 			for (unsigned k=0; k<mygridsize.nz(); k++) {
-
+				
 				float x1 = mygridsize.origin()[0] + i*mygridsize.delta()[0];
 				float y1 = mygridsize.origin()[1] + j*mygridsize.delta()[1];
 				float z1 = mygridsize.origin()[2] + k*mygridsize.delta()[2];
 
 				for (int iatom=0; iatom<atomVector.size(); iatom++) {
-					
+
 					float x2 = atomVector[iatom].getX();
 					float y2 = atomVector[iatom].getY();
 					float z2 = atomVector[iatom].getZ();
 
-					if (DistanceBetween3DPoints(x1, x2, y1, y2, z1, z2) <= atomVector[iatom].getvdW_radius(atomVector[iatom])) {
+					if (DistanceBetween3DPoints(x1,x2,y1,y2,z1,z2) <= atomVector[iatom].getvdW_radius(atomVector[iatom])) {
 						mygriddata.operator()(i,j,k) = 1;
 						break;
 					}
@@ -429,6 +431,8 @@ GridData doSESTest(GridSize mygridsize, QVector<Atom> atomVector, GridData mygri
 	// GridData entries are initialised to 0, which is 'inadmissible'
 	double solvent_radius = solvent.getSolventRadius();
 	int maxNPWS = solvent_radius/mygridsize.delta()[0];
+
+	// Store admissible points so that we can modify the grid without modifying the conditional
 	QVector<GridPoint> admissiblePointVector;
 
 	for (unsigned i=0; i<mygridsize.nx(); i++) {
@@ -448,32 +452,22 @@ GridData doSESTest(GridSize mygridsize, QVector<Atom> atomVector, GridData mygri
 					float y2 = atomVector[iatom].getY();
 					float z2 = atomVector[iatom].getZ();
 
-					if (DistanceBetween3DPoints(x1, x2, y1, y2, z1, z2) < (atomVector[iatom].getvdW_radius(atomVector[iatom]) + solvent_radius)) {
+					if (DistanceBetween3DPoints(x1,x2,y1,y2,z1,z2) < (atomVector[iatom].getvdW_radius(atomVector[iatom]) + solvent_radius)) {
 						mygriddata.operator()(i,j,k) = 0;
 						break;
 					}
 				}
-			}
-		}
-	}
-
-	// Store admissible points in memory
-	// Alternatively, we could add all points in memory in first step and remove those
-	// that end up failing the test, removing a second iteration through the whole grid
-	// but increasing the number of memory allocations / de-allocations... ?
-	for (unsigned i=0; i<mygridsize.nx(); i++) {
-		for (unsigned j=0; j<mygridsize.ny(); j++) {
-			for (unsigned k=0; k<mygridsize.nz(); k++) {
-
+				
+				// If the point has been deemed admissible via the previous test...
+				// Append it to the list of admissible points.
 				if (mygriddata.operator()(i,j,k) == 1) {
 					GridPoint admissiblePoint(i,j,k);
 					admissiblePointVector.append(admissiblePoint);
-
 				}
 			}
 		}
 	}
-	
+
 	/// Find accessible points using the admissible subset ///
 	// If the gridpoint refers to every atom and is outside each of them, do the rest of the test.
 	// This involves assigning all points within the solvent sphere that is centred on (i,j,k) to 1
@@ -492,17 +486,12 @@ GridData doSESTest(GridSize mygridsize, QVector<Atom> atomVector, GridData mygri
 			for (int d2 = -maxNPWS; d2 < maxNPWS+1; d2++) {
 				for (int d3 = -maxNPWS; d3 < maxNPWS+1; d3++) {
 
-					int ind1 = i + d1;
-					int ind2 = j + d2;
-					int ind3 = k + d3;
-
-					// Unneccesarily testing the starting gridpoint
-					if (d1 == 0 && d2 == 0 && d3 ==0) {
-						continue; 
-					}
+					unsigned int ind1 = i + d1;
+					unsigned int ind2 = j + d2;
+					unsigned int ind3 = k + d3;
 
 					// Trying to index outside the grid itself (less than minimum).
-					if (ind1 < 0 || ind2 < 0 || ind3 < 0) {
+					if (std::signbit(ind1) || std::signbit(ind2) || std::signbit(ind3)) {
 						continue;
 					}
 
@@ -511,11 +500,11 @@ GridData doSESTest(GridSize mygridsize, QVector<Atom> atomVector, GridData mygri
 						continue;
 					}
 
-					float xj1 = mygridsize.origin()[0] + (ind1)*mygridsize.delta()[0];
-					float yj1 = mygridsize.origin()[1] + (ind2)*mygridsize.delta()[1];
-					float zj1 = mygridsize.origin()[2] + (ind3)*mygridsize.delta()[2];
+					float x2 = mygridsize.origin()[0] + (ind1)*mygridsize.delta()[0];
+					float y2 = mygridsize.origin()[1] + (ind2)*mygridsize.delta()[1];
+					float z2 = mygridsize.origin()[2] + (ind3)*mygridsize.delta()[2];
 
-					if ( DistanceBetween3DPoints(x1, xj1, y1, yj1, z1, zj1) <= solvent_radius) {
+					if ( DistanceBetween3DPoints(x1,x2,y1,y2,z1,z2) <= solvent_radius) {
 						mygriddata.operator()(ind1, ind2, ind3) = 1;
 					}
 				}
@@ -544,10 +533,10 @@ int main( ) {
 	QElapsedTimer myTimer;
 	myTimer.start();
 
-	int Quality = 1;
+	int Quality = 3;
 
-	QVector<Atom> atomVector = parseXYZ("1ubq.xyz");
-	QString filePath = "1ubq-SEStest-240817.cube";
+	QVector<Atom> atomVector = parseXYZ("ring.xyz");
+	QString filePath = "ring-SEStest-270817.cube";
 	Solvent DefaultSolvent("Water", 1.4);
 
 	QVector<double> BBMin = getBBMin(atomVector, DefaultSolvent);
@@ -558,15 +547,17 @@ int main( ) {
 
 	//GridData test = doVDWTest(myGridSize, atomVector, myGridData);
 	GridData test = doSESTest(myGridSize, atomVector, myGridData, DefaultSolvent);
-
-	QStringList coordinates = getCoordinates(atomVector);
-	test.saveToCubeFile(filePath, coordinates, false);
-
-	int testTimeNS = myTimer.elapsed(); // time taken in ns
 	
+	int testTimeNS = myTimer.elapsed(); // time taken in ns
 	cout << " " << endl;
 	cout << "SESTest completed in " << testTimeNS << " ns @ Quality = " << Quality << "." << endl;
 	cout << " " << endl;
+
+	QStringList coordinates = getCoordinates(atomVector);
+
+	test.saveToCubeFile(filePath, coordinates, false);
+
+//	cout << grad.x << endl;
 
 	return 0;
 }
