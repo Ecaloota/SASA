@@ -19,15 +19,12 @@ binary array, for visualisation within IQMol. */
 using namespace std;
 
 typedef boost::multi_array<double, 3> Array3D;
-typedef std::tuple<unsigned, unsigned, unsigned> GridPoint; // A way of storing admissible gridpoints
+typedef std::tuple<unsigned, unsigned, unsigned> GridPoint;
 
 double const BohrRadius          = 5.2917721092e-11;
 double const BohrToAngstrom      = BohrRadius*1.0e10;
 double const AngstromToBohr      = 1.0/BohrToAngstrom;
 
-//Vec grad;
-
-// An atom contains an atomType, a set of coords and an index.
 class Atom {
 	private:
 		unsigned m_index;
@@ -52,17 +49,6 @@ class Atom {
 		{
 			return m_index == other.m_index;
 		}
-
-		//bool operator<(const Atom &other) const {
-		//	if (m_xcoord < other.m_xcoord) {return true;}
-		//	else if (m_xcoord == other.m_xcoord) {
-		//		if (m_ycoord < other.m_ycoord) {return true;}
-		//		else if (m_ycoord == other.m_ycoord) {
-		//			if (m_zcoord < other.m_zcoord) {return true;}
-		//		}
-		//	}
-		//	return false;
-		//}
 
 		// Refer AtomicProperty.C
 		float getvdW_radius(Atom iatom) {
@@ -210,21 +196,70 @@ class GridData {
 		QVector<double> const& origin() const { return m_origin; }
         QVector<double> const& delta() const {return m_delta; }
 
+        void copy(GridData const& that)
+        {
+        	m_origin 	= that.m_origin;
+        	m_delta 	= that.m_delta;
+
+        	unsigned nx, ny, nz;
+        	that.getNumberOfPoints(nx, ny, nz);
+        	Array3D::extent_gen extents;
+        	m_data.resize(extents[nx][ny][nz]);
+        	m_data = that.m_data;
+        }
+
         // Read only
 		double const& operator()(unsigned const i, unsigned const j, unsigned const k) const
-         {
+        {
             return m_data[i][j][k];
-         }
+        }
 
-         // Read and write
-         double& operator()(unsigned const i, unsigned const j, unsigned const k)
-         {
-            return m_data[i][j][k];
-         }
+        // Read and write
+        double& operator()(unsigned const i, unsigned const j, unsigned const k)
+        {
+           return m_data[i][j][k];
+        }
 
-		bool saveToCubeFile(QString const& filePath, QStringList const& coordinates, 
-			bool const invertSign) const
-		{
+		double interpolate(double const x, double const y, double const z) const {
+
+			double value(0.0);
+			double weight(6.0);
+
+			unsigned nx = m_data.shape()[0];
+			unsigned ny = m_data.shape()[1];
+			unsigned nz = m_data.shape()[2];
+
+			// The centre vertex, the point which is passed to the interpolation.
+			Vec w111(x,y,z);
+
+			if (x==0 || y==0 || z==0) {
+				return value;
+			}
+
+			if (x==(nx-1) || y==(ny-1) || z==(nz-1)) {
+				return value;
+			}
+
+			Vec w011(x-1,y,z);
+			Vec w211(x+1,y,z);
+
+			Vec w101(x,y-1,z);
+			Vec w121(x,y+1,z);
+
+			Vec w110(x,y,z-1);
+			Vec w112(x,y,z+1);
+	
+			value = (1/weight)*( m_data[x-1][y][z] 
+							   + m_data[x+1][y][z] 
+							   + m_data[x][y-1][z]
+							   + m_data[x][y+1][z]
+							   + m_data[x][y][z-1]
+							   + m_data[x][y][z+1] );
+
+			return value;
+		}
+
+		bool saveToCubeFile(QString const& filePath, QStringList const& coordinates, bool const invertSign) const {
 			QFile file(filePath);
 			if (!file.open(QIODevice::WriteOnly | QIODevice::Text))
 				return 0;
@@ -511,7 +546,34 @@ GridData doSESTest(GridSize mygridsize, QVector<Atom> atomVector, GridData mygri
 			}
 		}
 	}
+
 	return mygriddata;
+}
+
+GridData doGridSmoothing(GridSize mygridsize, GridData mygriddata, bool gridsmoothing) {
+
+	if (gridsmoothing) {
+		// Create a copy of mygriddata to be modfied
+		GridData mygriddatacopy(mygridsize);
+		mygriddatacopy.copy(mygriddata);
+
+		for (unsigned i=0; i<mygridsize.nx(); i++) {
+			for (unsigned j=0; j<mygridsize.ny(); j++) {
+				for (unsigned k=0; k<mygridsize.nz(); k++) {
+					/// Modify the grid copy only. Use the original grid as an unmutable reference point.
+					mygriddatacopy.operator()(i,j,k) = mygriddata.interpolate(i,j,k);
+				}
+			}
+		}
+
+		// return the modified copy for plotting.
+		return mygriddatacopy;
+	}
+
+	else {
+		// do nothing basically
+		return mygriddata;
+	}
 }
 
 QStringList getCoordinates(QVector<Atom> atomVector) {
@@ -533,11 +595,17 @@ int main( ) {
 	QElapsedTimer myTimer;
 	myTimer.start();
 
-	int Quality = 3;
+	int Quality = 2;
+	bool gridsmoothing = true;
 
 	QVector<Atom> atomVector = parseXYZ("ring.xyz");
-	QString filePath = "ring-SEStest-270817.cube";
+	QString filePath = "ring-SEStest-290817-smooth.cube";
 	Solvent DefaultSolvent("Water", 1.4);
+
+	// If there are not at least two testing points per solvent radius...
+	if (DefaultSolvent.getSolventRadius()/stepSize(Quality) < 2) {
+		cout << endl << "WARNING: You may need to increase the density of your grid!" << endl;
+	}
 
 	QVector<double> BBMin = getBBMin(atomVector, DefaultSolvent);
 	QVector<double> BBMax = getBBMax(atomVector, DefaultSolvent);
@@ -545,9 +613,9 @@ int main( ) {
 	GridSize myGridSize(BBMin, BBMax, Quality);
 	GridData myGridData(myGridSize);	
 
-	//GridData test = doVDWTest(myGridSize, atomVector, myGridData);
 	GridData test = doSESTest(myGridSize, atomVector, myGridData, DefaultSolvent);
-	
+	GridData smoothTest = doGridSmoothing(myGridSize, test, gridsmoothing);
+
 	int testTimeNS = myTimer.elapsed(); // time taken in ns
 	cout << " " << endl;
 	cout << "SESTest completed in " << testTimeNS << " ns @ Quality = " << Quality << "." << endl;
@@ -555,9 +623,7 @@ int main( ) {
 
 	QStringList coordinates = getCoordinates(atomVector);
 
-	test.saveToCubeFile(filePath, coordinates, false);
-
-//	cout << grad.x << endl;
+	smoothTest.saveToCubeFile(filePath, coordinates, false);
 
 	return 0;
 }
